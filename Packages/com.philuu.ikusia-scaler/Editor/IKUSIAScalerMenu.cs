@@ -2,6 +2,9 @@
 using UnityEditor;
 using System.Collections.Generic;
 using System;
+using System.IO;
+using UnityEngine.SceneManagement;
+using UnityEditor.SceneManagement;
 
 namespace IKUSIAScaler.Editor
 {
@@ -51,11 +54,29 @@ namespace IKUSIAScaler.Editor
             Japanese
         }
 
+        private enum AutoDetectionResult
+        {
+            NoSourceMatch,
+            NoTargetMatch,
+            SameAvatar,
+            NoProfile,
+            Detected
+        }
+
         // Debug logging toggle - set to true to enable debug output
-        private const bool DEBUG_LOGGING = false;
+        private static readonly bool DEBUG_LOGGING = false;
         private const float UNIT_SCALE_TOLERANCE = 0.01f;
         private const string LANGUAGE_PREF_KEY = "IKUSIA_Scaler_UILanguage";
         private const string LANGUAGE_PROMPT_DONE_KEY = "IKUSIA_Scaler_LanguagePromptDone";
+        private const string AUTO_CONVERT_ENABLED_KEY = "IKUSIA_Scaler_AutoConvertEnabled";
+        private const string AUTO_CONVERT_DISCOVERY_PROMPT_DONE_KEY = "IKUSIA_Scaler_AutoConvertDiscoveryPromptDone";
+        private const string AUTO_DETECTION_TRACE_LOGGING_ENABLED_KEY = "IKUSIA_Scaler_AutoDetectTraceLoggingEnabled";
+
+        private static readonly HashSet<int> knownHierarchyObjectIds = new HashSet<int>();
+        private static readonly Dictionary<int, int> knownHierarchyParentIds = new Dictionary<int, int>();
+        private static readonly HashSet<int> processedPrefabRootIds = new HashSet<int>();
+        private static readonly HashSet<int> pendingPrefabRootIds = new HashSet<int>();
+        private static bool hierarchyTrackingInitialized;
 
         // All conversion profiles
         private static readonly List<ScalingProfile> conversionProfiles = new List<ScalingProfile>()
@@ -83,15 +104,32 @@ namespace IKUSIAScaler.Editor
             {
                 if (!EditorPrefs.GetBool(LANGUAGE_PROMPT_DONE_KEY, false))
                 {
-                    ShowLanguageSelectionDialog(true);
+                    IKUSIAScalerSettingsWindow.ShowWindow(true);
                 }
+            };
+        }
+
+        [InitializeOnLoadMethod]
+        private static void InitializeAutomaticDetection()
+        {
+            EditorApplication.delayCall += () =>
+            {
+                if (hierarchyTrackingInitialized)
+                {
+                    return;
+                }
+
+                hierarchyTrackingInitialized = true;
+                BuildHierarchySnapshot();
+                EditorSceneManager.sceneOpened += OnSceneOpened;
+                EditorApplication.hierarchyChanged += OnHierarchyChanged;
             };
         }
 
         [MenuItem("Window/IKUSIA Scaler Settings")]
         private static void OpenIKUSIAScalerSettings()
         {
-            ShowLanguageSelectionDialog(false);
+            IKUSIAScalerSettingsWindow.ShowWindow(false);
         }
 
         [MenuItem("GameObject/IKUSIA Scaler/Mizuki → Rurune", false, MENU_PRIORITY)]
@@ -304,10 +342,22 @@ namespace IKUSIAScaler.Editor
 
             List<string> searchCandidates = new List<string>();
 
+            // Include avatar root object naming as a practical fallback (e.g., "Mizuki fbx").
+            if (avatarRoot != null)
+            {
+                searchCandidates.Add(avatarRoot.name);
+            }
+
             if (animator.avatar != null)
             {
                 searchCandidates.Add(animator.avatar.name);
                 searchCandidates.Add(AssetDatabase.GetAssetPath(animator.avatar));
+            }
+
+            if (animator.runtimeAnimatorController != null)
+            {
+                searchCandidates.Add(animator.runtimeAnimatorController.name);
+                searchCandidates.Add(AssetDatabase.GetAssetPath(animator.runtimeAnimatorController));
             }
 
             if (searchCandidates.Count == 0)
@@ -315,7 +365,27 @@ namespace IKUSIAScaler.Editor
                 return AvatarType.Unknown;
             }
 
-            string combined = string.Join(" ", searchCandidates).ToLowerInvariant();
+            return DetectAvatarTypeFromCandidates(searchCandidates);
+        }
+
+        private static AvatarType DetectAvatarTypeFromCandidates(List<string> candidates)
+        {
+            if (candidates == null || candidates.Count == 0)
+            {
+                return AvatarType.Unknown;
+            }
+
+            string combined = string.Join(" ", candidates).ToLowerInvariant();
+
+            return DetectAvatarTypeFromCombinedText(combined);
+        }
+
+        private static AvatarType DetectAvatarTypeFromCombinedText(string combined)
+        {
+            if (string.IsNullOrEmpty(combined))
+            {
+                return AvatarType.Unknown;
+            }
 
             bool hasMizuki = combined.Contains("mizuki");
             bool hasRurune = combined.Contains("rurune");
@@ -340,6 +410,66 @@ namespace IKUSIAScaler.Editor
             return AvatarType.Kaguya;
         }
 
+        private static AvatarType DetectAvatarTypeFromPrefab(GameObject prefabRoot)
+        {
+            if (prefabRoot == null)
+            {
+                return AvatarType.Unknown;
+            }
+
+            List<string> candidates = new List<string> { prefabRoot.name };
+
+            GameObject sourcePrefab = PrefabUtility.GetCorrespondingObjectFromSource(prefabRoot);
+            if (sourcePrefab != null)
+            {
+                candidates.Add(sourcePrefab.name);
+                string assetPath = AssetDatabase.GetAssetPath(sourcePrefab);
+                if (!string.IsNullOrEmpty(assetPath))
+                {
+                    candidates.Add(assetPath);
+
+                    string fileName = Path.GetFileNameWithoutExtension(assetPath);
+                    if (!string.IsNullOrEmpty(fileName))
+                    {
+                        candidates.Add(fileName);
+                    }
+
+                    string[] pathSegments = assetPath.Split('/');
+                    foreach (string segment in pathSegments)
+                    {
+                        if (!string.IsNullOrEmpty(segment))
+                        {
+                            candidates.Add(segment);
+                        }
+                    }
+                }
+            }
+
+            return DetectAvatarTypeFromCandidates(candidates);
+        }
+
+        private static ScalingProfile FindConversionProfile(AvatarType sourceType, AvatarType targetType)
+        {
+            string sourceName = AvatarTypeToProfileName(sourceType);
+            string targetName = AvatarTypeToProfileName(targetType);
+
+            if (string.IsNullOrEmpty(sourceName) || string.IsNullOrEmpty(targetName))
+            {
+                return null;
+            }
+
+            foreach (ScalingProfile profile in conversionProfiles)
+            {
+                if (profile.sourceAvatar.Equals(sourceName, StringComparison.OrdinalIgnoreCase) &&
+                    profile.targetAvatar.Equals(targetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return profile;
+                }
+            }
+
+            return null;
+        }
+
         private static string AvatarTypeToProfileName(AvatarType avatarType)
         {
             switch (avatarType)
@@ -360,16 +490,26 @@ namespace IKUSIAScaler.Editor
         /// </summary>
         private static void ApplyConversion(ScalingProfile profile)
         {
-            GameObject selectedObject = Selection.activeGameObject;
+            ApplyConversion(profile, Selection.activeGameObject, true);
+        }
 
+        /// <summary>
+        /// Core conversion logic - applies the scaling profile to the target GameObject
+        /// </summary>
+        private static bool ApplyConversion(ScalingProfile profile, GameObject selectedObject, bool showUserDialogs)
+        {
             if (selectedObject == null)
             {
-                EditorUtility.DisplayDialog(
-                    L("IKUSIA Scaler", "IKUSIA Scaler"),
-                    L("Please select a GameObject in the hierarchy.", "HierarchyでGameObjectを選択してください。"),
-                    L("OK", "OK")
-                );
-                return;
+                if (showUserDialogs)
+                {
+                    EditorUtility.DisplayDialog(
+                        L("IKUSIA Scaler", "IKUSIA Scaler"),
+                        L("Please select an outfit GameObject in the Hierarchy, then try again.", "Hierarchyで衣装のGameObjectを選択してから、もう一度お試しください。"),
+                        L("OK", "OK")
+                    );
+                }
+
+                return false;
             }
 
             DebugLog($"Processing conversion: {profile.GetDisplayName()}");
@@ -382,23 +522,27 @@ namespace IKUSIAScaler.Editor
             {
                 Debug.LogWarning($"[IKUSIA Scaler] No Armature found in '{selectedObject.name}' or its children. " +
                     "Please ensure the selected GameObject contains an object with 'Armature' in its name.");
-                EditorUtility.DisplayDialog(
-                    L("IKUSIA Scaler - Armature Not Found", "IKUSIA Scaler - Armatureが見つかりません"),
-                    L(
-                        $"No Armature found in '{selectedObject.name}' or its children.\n\nThe tool searches for any child GameObject with 'Armature' in its name (case-insensitive).",
-                        $"'{selectedObject.name}' またはその子オブジェクト内にArmatureが見つかりません。\n\nこのツールは名前に 'Armature' を含む子GameObjectを検索します（大文字小文字を区別しません）。"
-                    ),
-                    L("OK", "OK")
-                );
-                return;
+                if (showUserDialogs)
+                {
+                    EditorUtility.DisplayDialog(
+                        L("IKUSIA Scaler - Couldn’t Find Armature", "IKUSIA Scaler - Armatureが見つかりません"),
+                        L(
+                            $"I couldn’t find an Armature under '{selectedObject.name}'.\n\nQuick check: this tool looks for any child GameObject whose name contains 'Armature' (case-insensitive).",
+                            $"'{selectedObject.name}' 配下にArmatureが見つかりませんでした。\n\n補足: このツールは名前に 'Armature' を含む子GameObjectを検索します（大文字小文字は区別しません）。"
+                        ),
+                        L("OK", "OK")
+                    );
+                }
+
+                return false;
             }
 
             DebugLog($"Found Armature: {armature.name}");
 
-            if (!RunPreflightValidation(selectedObject.transform, armature, profile))
+            if (!RunPreflightValidation(selectedObject.transform, armature, profile, showUserDialogs))
             {
                 DebugLog("Conversion cancelled by user during preflight validation.");
-                return;
+                return false;
             }
 
             // Record undo for the armature
@@ -458,11 +602,14 @@ namespace IKUSIAScaler.Editor
 
             if (!allBonesFound)
             {
-                EditorUtility.DisplayDialog(
-                    L("IKUSIA Scaler - Partial Success", "IKUSIA Scaler - 一部成功"),
-                    resultMessage,
-                    L("OK", "OK")
-                );
+                if (showUserDialogs)
+                {
+                    EditorUtility.DisplayDialog(
+                        L("IKUSIA Scaler - Partial Success", "IKUSIA Scaler - 一部成功"),
+                        resultMessage,
+                        L("OK", "OK")
+                    );
+                }
             }
             else
             {
@@ -470,6 +617,8 @@ namespace IKUSIAScaler.Editor
                 // For production, silent success is better UX
                 DebugLog(resultMessage);
             }
+
+            return true;
         }
 
         /// <summary>
@@ -515,22 +664,28 @@ namespace IKUSIAScaler.Editor
         /// <summary>
         /// Runs preflight warnings and lets the user decide whether to continue.
         /// </summary>
-        private static bool RunPreflightValidation(Transform selectedRoot, Transform armature, ScalingProfile profile)
+        private static bool RunPreflightValidation(Transform selectedRoot, Transform armature, ScalingProfile profile, bool showUserDialogs)
         {
             string avatarRootMarkers;
             if (LooksLikeAvatarRootSelection(selectedRoot, armature, out avatarRootMarkers))
             {
+                if (!showUserDialogs)
+                {
+                    Debug.LogWarning($"[IKUSIA Scaler] Skipped automatic conversion for '{selectedRoot.name}' because it looks like an avatar root.");
+                    return false;
+                }
+
                 string avatarRootMessage =
                     L(
-                        $"The selected object '{selectedRoot.name}' looks like an Avatar Root (top-level object with an Armature child).\n\nIKUSIA Scaler is meant to be used on an outfit root. Applying conversion from avatar root can scale unexpected parts.\n\nDetected avatar markers: {avatarRootMarkers}\nDetected Armature: {armature.name}\nRequested conversion: {profile.GetDisplayName()}\n\nContinue anyway?",
-                        $"選択したオブジェクト '{selectedRoot.name}' はAvatar Rootの可能性があります（Armatureを子に持つ最上位オブジェクト）。\n\nIKUSIA Scalerは衣装のRootに対して使用する想定です。Avatar Rootから変換を適用すると、意図しない部分がスケールされる可能性があります。\n\n検出されたアバターマーカー: {avatarRootMarkers}\n検出されたArmature: {armature.name}\n要求された変換: {profile.GetDisplayName()}\n\nこのまま続行しますか？"
+                        $"Heads up: '{selectedRoot.name}' looks like an Avatar Root (top-level object with an Armature child).\n\nIKUSIA Scaler is usually meant for outfit roots, so applying this here may scale parts you didn’t intend.\n\nDetected avatar markers: {avatarRootMarkers}\nDetected Armature: {armature.name}\nRequested conversion: {profile.GetDisplayName()}\n\nDo you want to continue anyway?",
+                        $"ご注意: '{selectedRoot.name}' はAvatar Rootの可能性があります（Armatureを子に持つ最上位オブジェクト）。\n\nIKUSIA Scalerは通常、衣装のRootで使う想定です。ここで適用すると、意図しない箇所までスケールされる場合があります。\n\n検出されたアバターマーカー: {avatarRootMarkers}\n検出されたArmature: {armature.name}\n要求された変換: {profile.GetDisplayName()}\n\nこのまま続行しますか？"
                     );
 
                 bool continueFromAvatarRoot = EditorUtility.DisplayDialog(
-                    L("IKUSIA Scaler - Selection Warning", "IKUSIA Scaler - 選択警告"),
+                    L("IKUSIA Scaler - Quick Warning", "IKUSIA Scaler - 注意"),
                     avatarRootMessage,
-                    L("Continue", "続行"),
-                    L("Cancel", "キャンセル")
+                    L("Continue Anyway", "このまま続行"),
+                    L("Go Back", "戻る")
                 );
 
                 if (!continueFromAvatarRoot)
@@ -541,17 +696,23 @@ namespace IKUSIAScaler.Editor
 
             if (!IsApproximatelyUnitScale(armature.localScale, UNIT_SCALE_TOLERANCE))
             {
+                if (!showUserDialogs)
+                {
+                    Debug.LogWarning($"[IKUSIA Scaler] Skipped automatic conversion for '{selectedRoot.name}' because Armature '{armature.name}' is already scaled.");
+                    return false;
+                }
+
                 string scaleWarningMessage =
                     L(
-                        $"The detected Armature '{armature.name}' is not near 1/1/1 scale.\n\nCurrent Armature scale: X {armature.localScale.x:F4}, Y {armature.localScale.y:F4}, Z {armature.localScale.z:F4}\nUnit tolerance: +/- {UNIT_SCALE_TOLERANCE:F2}\n\nThis may indicate it was already modified. Continuing will multiply the current scale and may compound previous edits.\n\nRequested conversion: {profile.GetDisplayName()}\n\nContinue anyway?",
-                        $"検出されたArmature '{armature.name}' は1/1/1スケール付近ではありません。\n\n現在のArmatureスケール: X {armature.localScale.x:F4}, Y {armature.localScale.y:F4}, Z {armature.localScale.z:F4}\n判定許容値: +/- {UNIT_SCALE_TOLERANCE:F2}\n\nすでに変更済みである可能性があります。このまま続行すると現在のスケールに乗算され、以前の調整がさらに積み重なる可能性があります。\n\n要求された変換: {profile.GetDisplayName()}\n\nこのまま続行しますか？"
+                        $"Quick heads-up: the Armature '{armature.name}' is not close to 1/1/1 scale.\n\nCurrent Armature scale: X {armature.localScale.x:F4}, Y {armature.localScale.y:F4}, Z {armature.localScale.z:F4}\nUnit tolerance: +/- {UNIT_SCALE_TOLERANCE:F2}\n\nThis usually means it was edited before. If you continue, the scale will be multiplied again and previous edits may stack.\n\nRequested conversion: {profile.GetDisplayName()}\n\nContinue anyway?",
+                        $"確認です: Armature '{armature.name}' は1/1/1スケール付近ではありません。\n\n現在のArmatureスケール: X {armature.localScale.x:F4}, Y {armature.localScale.y:F4}, Z {armature.localScale.z:F4}\n判定許容値: +/- {UNIT_SCALE_TOLERANCE:F2}\n\nすでに調整済みの可能性があります。このまま続行するとさらに乗算され、以前の調整が重なる場合があります。\n\n要求された変換: {profile.GetDisplayName()}\n\nこのまま続行しますか？"
                     );
 
                 bool continueFromScaleWarning = EditorUtility.DisplayDialog(
-                    L("IKUSIA Scaler - Armature Scale Warning", "IKUSIA Scaler - Armatureスケール警告"),
+                    L("IKUSIA Scaler - Scale Check", "IKUSIA Scaler - スケール確認"),
                     scaleWarningMessage,
-                    L("Continue", "続行"),
-                    L("Cancel", "キャンセル")
+                    L("Continue Anyway", "このまま続行"),
+                    L("Go Back", "戻る")
                 );
 
                 if (!continueFromScaleWarning)
@@ -740,10 +901,43 @@ namespace IKUSIAScaler.Editor
             return stored == UILanguage.Japanese.ToString() ? UILanguage.Japanese : UILanguage.English;
         }
 
+        private static bool IsAutomaticConversionEnabled()
+        {
+            return EditorPrefs.GetBool(AUTO_CONVERT_ENABLED_KEY, false);
+        }
+
         private static void SetCurrentLanguage(UILanguage language)
         {
             EditorPrefs.SetString(LANGUAGE_PREF_KEY, language.ToString());
             EditorPrefs.SetBool(LANGUAGE_PROMPT_DONE_KEY, true);
+        }
+
+        private static void SetAutomaticConversionEnabled(bool enabled)
+        {
+            EditorPrefs.SetBool(AUTO_CONVERT_ENABLED_KEY, enabled);
+        }
+
+        private static bool IsAutoDetectionTraceLoggingEnabled()
+        {
+            return EditorPrefs.GetBool(AUTO_DETECTION_TRACE_LOGGING_ENABLED_KEY, false);
+        }
+
+        private static void SetAutoDetectionTraceLoggingEnabled(bool enabled)
+        {
+            EditorPrefs.SetBool(AUTO_DETECTION_TRACE_LOGGING_ENABLED_KEY, enabled);
+        }
+
+        private static void ResetAllUserSettingsAndRuntimeState()
+        {
+            EditorPrefs.DeleteKey(LANGUAGE_PREF_KEY);
+            EditorPrefs.DeleteKey(LANGUAGE_PROMPT_DONE_KEY);
+            EditorPrefs.DeleteKey(AUTO_CONVERT_ENABLED_KEY);
+            EditorPrefs.DeleteKey(AUTO_CONVERT_DISCOVERY_PROMPT_DONE_KEY);
+            EditorPrefs.DeleteKey(AUTO_DETECTION_TRACE_LOGGING_ENABLED_KEY);
+
+            processedPrefabRootIds.Clear();
+            pendingPrefabRootIds.Clear();
+            BuildHierarchySnapshot();
         }
 
         private static string L(string english, string japanese)
@@ -751,41 +945,589 @@ namespace IKUSIAScaler.Editor
             return GetCurrentLanguage() == UILanguage.Japanese ? japanese : english;
         }
 
-        private static void ShowLanguageSelectionDialog(bool isFirstRun)
+        private class IKUSIAScalerSettingsWindow : EditorWindow
         {
-            int choice = EditorUtility.DisplayDialogComplex(
-                "IKUSIA Scaler - Language / 言語設定",
-                "Please select your language preference.\n言語設定を選択してください。\n\nEnglish or Japanese can be changed anytime from:\nWindow > IKUSIA Scaler Settings\n\n英語または日本語はいつでも次から変更できます:\nWindow > IKUSIA Scaler Settings",
-                "English",
-                "日本語",
-                isFirstRun ? "Later" : "Cancel"
+            private UILanguage selectedLanguage;
+            private bool automaticConversionEnabled;
+            private bool autoDetectionTraceLoggingEnabled;
+            private bool markPromptDoneOnClose;
+            private bool applied;
+            private GUIStyle pageTitleStyle;
+            private GUIStyle pageSubtitleStyle;
+            private GUIStyle sectionStyle;
+            private GUIStyle sectionTitleStyle;
+            private GUIStyle bodyTextStyle;
+            private GUIStyle resetButtonStyle;
+
+            public static void ShowWindow(bool isFirstRun)
+            {
+                IKUSIAScalerSettingsWindow window = GetWindow<IKUSIAScalerSettingsWindow>(true, L("IKUSIA Scaler Settings", "IKUSIA Scaler 設定"));
+                window.minSize = new Vector2(460f, 300f);
+                window.maxSize = new Vector2(760f, 520f);
+                window.markPromptDoneOnClose = isFirstRun;
+                window.applied = false;
+                window.selectedLanguage = GetCurrentLanguage();
+                window.Show();
+                window.Focus();
+            }
+
+            private void OnEnable()
+            {
+                selectedLanguage = GetCurrentLanguage();
+                automaticConversionEnabled = IsAutomaticConversionEnabled();
+                autoDetectionTraceLoggingEnabled = IsAutoDetectionTraceLoggingEnabled();
+            }
+
+            private void OnDisable()
+            {
+                if (markPromptDoneOnClose && !applied)
+                {
+                    EditorPrefs.SetBool(LANGUAGE_PROMPT_DONE_KEY, true);
+                }
+            }
+
+            private void OnGUI()
+            {
+                EnsureStyles();
+
+                EditorGUILayout.Space(8f);
+                DrawHeader();
+                EditorGUILayout.Space(6f);
+
+                if (markPromptDoneOnClose)
+                {
+                    DrawOnboardingIntro();
+                }
+
+                DrawLanguageSetting();
+
+                if (!markPromptDoneOnClose)
+                {
+                    DrawGeneralSettings();
+                }
+
+                GUILayout.FlexibleSpace();
+                DrawFooterButtons();
+            }
+
+            private void EnsureStyles()
+            {
+                if (pageTitleStyle == null)
+                {
+                    pageTitleStyle = new GUIStyle(EditorStyles.boldLabel)
+                    {
+                        fontSize = 17,
+                        alignment = TextAnchor.MiddleLeft,
+                        richText = true
+                    };
+                }
+
+                if (pageSubtitleStyle == null)
+                {
+                    pageSubtitleStyle = new GUIStyle(EditorStyles.label)
+                    {
+                        wordWrap = true,
+                        richText = true
+                    };
+                }
+
+                if (sectionStyle == null)
+                {
+                    sectionStyle = new GUIStyle("box")
+                    {
+                        padding = new RectOffset(12, 12, 10, 10),
+                        margin = new RectOffset(6, 6, 4, 4)
+                    };
+                }
+
+                if (sectionTitleStyle == null)
+                {
+                    sectionTitleStyle = new GUIStyle(EditorStyles.boldLabel)
+                    {
+                        fontSize = 12
+                    };
+                }
+
+                if (bodyTextStyle == null)
+                {
+                    bodyTextStyle = new GUIStyle(EditorStyles.wordWrappedLabel)
+                    {
+                        richText = true
+                    };
+                }
+
+                if (resetButtonStyle == null)
+                {
+                    resetButtonStyle = new GUIStyle(GUI.skin.button)
+                    {
+                        alignment = TextAnchor.MiddleCenter,
+                        fontStyle = FontStyle.Bold
+                    };
+                }
+            }
+
+            private void DrawHeader()
+            {
+                EditorGUILayout.BeginVertical(sectionStyle);
+                EditorGUILayout.LabelField(L("IKUSIA Scaler Settings", "IKUSIA Scaler 設定"), pageTitleStyle);
+                EditorGUILayout.Space(2f);
+                EditorGUILayout.LabelField(
+                    L("Customize how IKUSIA Scaler behaves in your editor.", "IKUSIA Scaler の動作をお好みに合わせて設定できます。"),
+                    pageSubtitleStyle
+                );
+                EditorGUILayout.EndVertical();
+            }
+
+            private void DrawOnboardingIntro()
+            {
+                EditorGUILayout.BeginVertical(sectionStyle);
+                EditorGUILayout.LabelField(L("First-Time Setup", "初回セットアップ"), sectionTitleStyle);
+                EditorGUILayout.Space(2f);
+                EditorGUILayout.LabelField(
+                    L("Welcome! Pick the language you’d like to use.", "ようこそ。使用する言語を選んでください。"),
+                    bodyTextStyle
+                );
+                EditorGUILayout.EndVertical();
+            }
+
+            private void DrawLanguageSetting()
+            {
+                EditorGUILayout.BeginVertical(sectionStyle);
+                EditorGUILayout.LabelField(L("Language", "言語"), sectionTitleStyle);
+                EditorGUILayout.Space(2f);
+
+                EditorGUI.BeginChangeCheck();
+                {
+                    string[] languageOptions = { "English", "日本語" };
+                    int currentIndex = selectedLanguage == UILanguage.Japanese ? 1 : 0;
+                    int selectedIndex = EditorGUILayout.Popup(L("Display Language", "表示言語"), currentIndex, languageOptions);
+                    selectedLanguage = selectedIndex == 1 ? UILanguage.Japanese : UILanguage.English;
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        Repaint();
+                    }
+                }
+
+                EditorGUILayout.EndVertical();
+            }
+
+            // Keep settings drawing isolated so new options can be added cleanly.
+            private void DrawGeneralSettings()
+            {
+                EditorGUILayout.Space();
+                EditorGUILayout.BeginVertical(sectionStyle);
+                EditorGUILayout.LabelField(L("General", "一般"), sectionTitleStyle);
+                EditorGUILayout.Space(2f);
+
+                automaticConversionEnabled = EditorGUILayout.Toggle(
+                    L("Automatic Conversion", "自動変換"),
+                    automaticConversionEnabled
+                );
+
+                EditorGUILayout.LabelField(
+                    L(
+                        "Automatically converts dropped outfits when avatar names match on both sides (avatar root + outfit prefab or folder).",
+                        "アバター側（Avatar Root）と衣装側（Prefab名またはフォルダ名）の両方でアバター名が一致したときに、自動で変換を適用します。"
+                    ),
+                    bodyTextStyle
+                );
+
+                EditorGUILayout.Space();
+                autoDetectionTraceLoggingEnabled = EditorGUILayout.Toggle(
+                    L("Console Logs", "コンソールログ"),
+                    autoDetectionTraceLoggingEnabled
+                );
+
+                EditorGUILayout.LabelField(
+                    L(
+                        "For Troubleshooting.",
+                        "トラブルシュート用。"
+                    ),
+                    bodyTextStyle
+                );
+
+                EditorGUILayout.EndVertical();
+            }
+
+            private void DrawFooterButtons()
+            {
+                EditorGUILayout.Space(6f);
+                EditorGUILayout.BeginVertical(sectionStyle);
+                EditorGUILayout.BeginHorizontal();
+
+                if (!markPromptDoneOnClose && GUILayout.Button(L("Reset All Settings", "すべての設定をリセット"), resetButtonStyle, GUILayout.Width(190f), GUILayout.Height(24f)))
+                {
+                    bool isJapanese = selectedLanguage == UILanguage.Japanese;
+                    bool shouldReset = EditorUtility.DisplayDialog(
+                        isJapanese ? "IKUSIA Scaler - リセット確認" : "IKUSIA Scaler - Confirm Reset",
+                        isJapanese
+                            ? "IKUSIA Scalerのユーザー設定をすべて初期化します。\n\n対象:\n- 言語設定\n- 初回オンボーディング状態\n- 自動変換設定\n- 自動変換の初回案内表示状態\n- 自動検出ログ設定\n\nリセット後は初回オンボーディングが再表示されます。実行しますか？"
+                            : "You’re about to reset all IKUSIA Scaler user settings.\n\nThis includes:\n- Language setting\n- First-time onboarding state\n- Automatic conversion setting\n- Automatic conversion discovery prompt state\n- Auto-detection logging setting\n\nAfter reset, first-time onboarding will appear again. Continue?",
+                        isJapanese ? "リセットする" : "Yes, Reset",
+                        isJapanese ? "やめる" : "Not Now"
+                    );
+
+                    if (shouldReset)
+                    {
+                        ResetAllUserSettingsAndRuntimeState();
+                        selectedLanguage = GetCurrentLanguage();
+                        automaticConversionEnabled = IsAutomaticConversionEnabled();
+                        applied = true;
+                        markPromptDoneOnClose = false;
+                        Close();
+                        IKUSIAScalerSettingsWindow.ShowWindow(true);
+                    }
+
+                    return;
+                }
+
+                GUILayout.FlexibleSpace();
+
+                if (GUILayout.Button(L("Cancel", "キャンセル"), GUILayout.Width(110f), GUILayout.Height(24f)))
+                {
+                    Close();
+                    return;
+                }
+
+                if (GUILayout.Button(L("Apply", "適用"), GUILayout.Width(110f), GUILayout.Height(24f)))
+                {
+                    SetCurrentLanguage(selectedLanguage);
+                    if (!markPromptDoneOnClose)
+                    {
+                        SetAutomaticConversionEnabled(automaticConversionEnabled);
+                        SetAutoDetectionTraceLoggingEnabled(autoDetectionTraceLoggingEnabled);
+                    }
+                    applied = true;
+                    Close();
+                }
+
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.EndVertical();
+                EditorGUILayout.Space(4f);
+            }
+        }
+
+        private static void OnHierarchyChanged()
+        {
+            AutoDetectLog("Hierarchy changed callback fired.");
+
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating || EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                return;
+            }
+
+            HashSet<int> currentIds = CollectSceneObjectIds();
+            Dictionary<int, int> currentParentIds = CollectSceneObjectParentIds();
+            List<int> addedIds = new List<int>();
+            List<int> parentChangedIds = new List<int>();
+
+            foreach (int id in currentIds)
+            {
+                if (!knownHierarchyObjectIds.Contains(id))
+                {
+                    addedIds.Add(id);
+                }
+                else
+                {
+                    int oldParentId;
+                    int newParentId;
+                    bool hadOldParent = knownHierarchyParentIds.TryGetValue(id, out oldParentId);
+                    bool hasNewParent = currentParentIds.TryGetValue(id, out newParentId);
+                    if (hadOldParent && hasNewParent && oldParentId != newParentId)
+                    {
+                        parentChangedIds.Add(id);
+                    }
+                }
+            }
+
+            knownHierarchyObjectIds.Clear();
+            knownHierarchyObjectIds.UnionWith(currentIds);
+            knownHierarchyParentIds.Clear();
+            foreach (KeyValuePair<int, int> pair in currentParentIds)
+            {
+                knownHierarchyParentIds[pair.Key] = pair.Value;
+            }
+
+            if (addedIds.Count > 0)
+            {
+                AutoDetectLog($"Hierarchy changed. New objects detected: {addedIds.Count}");
+            }
+
+            if (parentChangedIds.Count > 0)
+            {
+                AutoDetectLog($"Hierarchy changed. Parent changes detected: {parentChangedIds.Count}");
+            }
+
+            HashSet<int> seenRoots = new HashSet<int>();
+            foreach (int id in addedIds)
+            {
+                QueuePrefabRootForAutoDetection(id, seenRoots);
+            }
+
+            foreach (int id in parentChangedIds)
+            {
+                QueuePrefabRootForAutoDetection(id, seenRoots);
+            }
+
+            EvaluatePendingPrefabRoots();
+        }
+
+        private static void QueuePrefabRootForAutoDetection(int objectId, HashSet<int> seenRoots)
+        {
+            GameObject addedObject = EditorUtility.InstanceIDToObject(objectId) as GameObject;
+            if (addedObject == null || !addedObject.scene.IsValid())
+            {
+                return;
+            }
+
+            GameObject prefabRoot = PrefabUtility.GetOutermostPrefabInstanceRoot(addedObject);
+            if (prefabRoot == null)
+            {
+                return;
+            }
+
+            int prefabRootId = prefabRoot.GetInstanceID();
+            if (!seenRoots.Add(prefabRootId))
+            {
+                return;
+            }
+
+            if (processedPrefabRootIds.Contains(prefabRootId))
+            {
+                return;
+            }
+
+            pendingPrefabRootIds.Add(prefabRootId);
+            AutoDetectLog($"Queued prefab root for evaluation: '{prefabRoot.name}' (ID: {prefabRootId})");
+        }
+
+        private static void EvaluatePendingPrefabRoots()
+        {
+            if (pendingPrefabRootIds.Count == 0)
+            {
+                return;
+            }
+
+            AutoDetectLog($"Evaluating pending prefab roots: {pendingPrefabRootIds.Count}");
+
+            List<int> resolvedIds = new List<int>();
+            foreach (int prefabRootId in pendingPrefabRootIds)
+            {
+                GameObject prefabRoot = EditorUtility.InstanceIDToObject(prefabRootId) as GameObject;
+                if (prefabRoot == null || !prefabRoot.scene.IsValid())
+                {
+                    AutoDetectLog($"Dropping pending entry for missing/invalid object ID: {prefabRootId}");
+                    resolvedIds.Add(prefabRootId);
+                    continue;
+                }
+
+                AutoDetectionResult result = EvaluateAutoConversionForDroppedPrefab(prefabRoot);
+                AutoDetectLog($"Evaluation result for '{prefabRoot.name}': {result}");
+                if (result == AutoDetectionResult.Detected ||
+                    result == AutoDetectionResult.NoSourceMatch ||
+                    result == AutoDetectionResult.SameAvatar ||
+                    result == AutoDetectionResult.NoProfile)
+                {
+                    processedPrefabRootIds.Add(prefabRootId);
+                    resolvedIds.Add(prefabRootId);
+                }
+            }
+
+            foreach (int resolvedId in resolvedIds)
+            {
+                pendingPrefabRootIds.Remove(resolvedId);
+            }
+        }
+
+        private static AutoDetectionResult EvaluateAutoConversionForDroppedPrefab(GameObject prefabRoot)
+        {
+            if (prefabRoot == null)
+            {
+                AutoDetectLog("Evaluate called with null prefab root.");
+                return AutoDetectionResult.NoSourceMatch;
+            }
+
+            GameObject sourcePrefab = PrefabUtility.GetCorrespondingObjectFromSource(prefabRoot);
+            string sourcePath = sourcePrefab != null ? AssetDatabase.GetAssetPath(sourcePrefab) : "(no source prefab path)";
+            AutoDetectLog($"Evaluating dropped prefab '{prefabRoot.name}'. Source path: {sourcePath}");
+
+            AvatarType outfitAvatarType = DetectAvatarTypeFromPrefab(prefabRoot);
+            if (outfitAvatarType == AvatarType.Unknown)
+            {
+                AutoDetectLog($"No supported source avatar keyword found for '{prefabRoot.name}'.");
+                return AutoDetectionResult.NoSourceMatch;
+            }
+
+            AutoDetectLog($"Detected outfit source avatar: {AvatarTypeToProfileName(outfitAvatarType)}");
+
+            AvatarType targetAvatarType = DetectAvatarTypeFromContext(prefabRoot.transform);
+            if (targetAvatarType == AvatarType.Unknown)
+            {
+                AutoDetectLog($"Target avatar not detected yet for '{prefabRoot.name}'. Waiting for next hierarchy update.");
+                return AutoDetectionResult.NoTargetMatch;
+            }
+
+            AutoDetectLog($"Detected avatar root target: {AvatarTypeToProfileName(targetAvatarType)}");
+
+            if (targetAvatarType == outfitAvatarType)
+            {
+                AutoDetectLog("Source and target avatars are the same. Skipping conversion.");
+                return AutoDetectionResult.SameAvatar;
+            }
+
+            ScalingProfile profile = FindConversionProfile(outfitAvatarType, targetAvatarType);
+            if (profile == null)
+            {
+                AutoDetectLog($"No conversion profile found for {AvatarTypeToProfileName(outfitAvatarType)} -> {AvatarTypeToProfileName(targetAvatarType)}.");
+                return AutoDetectionResult.NoProfile;
+            }
+
+            AutoDetectLog($"Matched conversion profile: {profile.GetDisplayName()}");
+
+            TryShowAutoConversionDiscoveryPrompt(profile, prefabRoot.name);
+
+            if (!IsAutomaticConversionEnabled())
+            {
+                Debug.Log($"[IKUSIA Scaler] Good news: detected '{profile.GetDisplayName()}' for '{prefabRoot.name}'. Turn on Automatic Conversion in Window > IKUSIA Scaler Settings to apply this automatically next time.");
+                AutoDetectLog("Automatic conversion is currently disabled in settings.");
+                return AutoDetectionResult.Detected;
+            }
+
+            bool applied = ApplyConversion(profile, prefabRoot, false);
+            if (applied)
+            {
+                Debug.Log($"[IKUSIA Scaler] Auto-applied conversion '{profile.GetDisplayName()}' to dropped prefab '{prefabRoot.name}'.");
+                AutoDetectLog("Auto conversion applied successfully.");
+            }
+            else
+            {
+                AutoDetectLog("Auto conversion attempted but was not applied (preflight guard or missing armature). Check warnings above.");
+            }
+
+            return AutoDetectionResult.Detected;
+        }
+
+        private static void TryShowAutoConversionDiscoveryPrompt(ScalingProfile profile, string outfitName)
+        {
+            if (EditorPrefs.GetBool(AUTO_CONVERT_DISCOVERY_PROMPT_DONE_KEY, false))
+            {
+                return;
+            }
+
+            string message = L(
+                $"Nice, I found a matching avatar conversion setup.\n\nOutfit: {outfitName}\nSuggested profile: {profile.GetDisplayName()}\n\nWould you like to enable Automatic Conversion so matching outfits are converted for you in the future?",
+                $"対応する変換の組み合わせを見つけました。\n\n衣装: {outfitName}\n推奨プロファイル: {profile.GetDisplayName()}\n\n今後、条件が一致した衣装を自動で変換するために「自動変換」を有効にしますか？"
             );
 
-            if (choice == 0)
+            bool enableNow = EditorUtility.DisplayDialog(
+                L("IKUSIA Scaler - Automatic Conversion", "IKUSIA Scaler - 自動変換"),
+                message,
+                L("Yes, Enable It", "有効にする"),
+                L("Maybe Later", "あとで")
+            );
+
+            if (enableNow)
             {
-                SetCurrentLanguage(UILanguage.English);
-                EditorUtility.DisplayDialog(
-                    "IKUSIA Scaler",
-                    "Language set to English.\n\nYou can reopen this language popup from:\nWindow > IKUSIA Scaler Settings",
-                    "OK"
-                );
+                SetAutomaticConversionEnabled(true);
+            }
+
+            EditorPrefs.SetBool(AUTO_CONVERT_DISCOVERY_PROMPT_DONE_KEY, true);
+        }
+
+        private static void BuildHierarchySnapshot()
+        {
+            knownHierarchyObjectIds.Clear();
+            knownHierarchyObjectIds.UnionWith(CollectSceneObjectIds());
+
+            knownHierarchyParentIds.Clear();
+            Dictionary<int, int> parentIds = CollectSceneObjectParentIds();
+            foreach (KeyValuePair<int, int> pair in parentIds)
+            {
+                knownHierarchyParentIds[pair.Key] = pair.Value;
+            }
+        }
+
+        private static void OnSceneOpened(Scene scene, OpenSceneMode mode)
+        {
+            BuildHierarchySnapshot();
+            processedPrefabRootIds.Clear();
+            pendingPrefabRootIds.Clear();
+        }
+
+        private static HashSet<int> CollectSceneObjectIds()
+        {
+            HashSet<int> ids = new HashSet<int>();
+
+            int sceneCount = SceneManager.sceneCount;
+            for (int i = 0; i < sceneCount; i++)
+            {
+                Scene scene = SceneManager.GetSceneAt(i);
+                if (!scene.IsValid() || !scene.isLoaded)
+                {
+                    continue;
+                }
+
+                GameObject[] roots = scene.GetRootGameObjects();
+                foreach (GameObject root in roots)
+                {
+                    AddGameObjectHierarchyIds(root.transform, ids);
+                }
+            }
+
+            return ids;
+        }
+
+        private static Dictionary<int, int> CollectSceneObjectParentIds()
+        {
+            Dictionary<int, int> parentIds = new Dictionary<int, int>();
+
+            int sceneCount = SceneManager.sceneCount;
+            for (int i = 0; i < sceneCount; i++)
+            {
+                Scene scene = SceneManager.GetSceneAt(i);
+                if (!scene.IsValid() || !scene.isLoaded)
+                {
+                    continue;
+                }
+
+                GameObject[] roots = scene.GetRootGameObjects();
+                foreach (GameObject root in roots)
+                {
+                    AddGameObjectHierarchyParentIds(root.transform, parentIds);
+                }
+            }
+
+            return parentIds;
+        }
+
+        private static void AddGameObjectHierarchyIds(Transform root, HashSet<int> ids)
+        {
+            if (root == null)
+            {
                 return;
             }
 
-            if (choice == 1)
+            ids.Add(root.gameObject.GetInstanceID());
+            foreach (Transform child in root)
             {
-                SetCurrentLanguage(UILanguage.Japanese);
-                EditorUtility.DisplayDialog(
-                    "IKUSIA Scaler",
-                    "言語を日本語に設定しました。\n\nこの言語設定ポップアップは次から再表示できます:\nWindow > IKUSIA Scaler Settings",
-                    "OK"
-                );
+                AddGameObjectHierarchyIds(child, ids);
+            }
+        }
+
+        private static void AddGameObjectHierarchyParentIds(Transform root, Dictionary<int, int> parentIds)
+        {
+            if (root == null)
+            {
                 return;
             }
 
-            if (isFirstRun)
+            int objectId = root.gameObject.GetInstanceID();
+            int parentId = root.parent != null ? root.parent.gameObject.GetInstanceID() : 0;
+            parentIds[objectId] = parentId;
+
+            foreach (Transform child in root)
             {
-                SetCurrentLanguage(UILanguage.English);
+                AddGameObjectHierarchyParentIds(child, parentIds);
             }
         }
 
@@ -797,6 +1539,14 @@ namespace IKUSIAScaler.Editor
             if (DEBUG_LOGGING)
             {
                 Debug.Log($"[IKUSIA Scaler] {message}");
+            }
+        }
+
+        private static void AutoDetectLog(string message)
+        {
+            if (IsAutoDetectionTraceLoggingEnabled())
+            {
+                Debug.Log($"[IKUSIA Scaler][AutoDetect] {message}");
             }
         }
     }
