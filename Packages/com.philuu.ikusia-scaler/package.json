@@ -6,6 +6,7 @@
   "description": "Lightweight Unity Editor tool for VRChat avatar creators. Quickly rescale imported outfit assets between compatible IKUSIA avatar bodies (Mizuki, Rurune, Kaguya) via right-click context menu.",
   "license": "MIT",
   "vrchatVersion": "2026.2.3",
+  "changelogUrl": "https://github.com/HugPhiluu/IKUSIA_Scaler/blob/main/Packages/com.philuu.ikusia-scaler/CHANGELOG.md",
   "author": {
     "name": "Philuu",
     "email": "github@philuu.net",
