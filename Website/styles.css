@@ -126,17 +126,6 @@ h1 {
   color: var(--neutral-foreground-rest);
 }
 
-.bannerImage {
-  aspect-ratio: 5 / 1;
-  border-radius: 6px;
-  max-width: 90%;
-  width: 100%;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  margin-bottom: 0.25rem;
-}
-
 .badge {
   border-radius: 4px;
   padding: 0.25rem 0.5rem;
