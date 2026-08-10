@@ -2,6 +2,11 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.0.4] - 2026-08-10
+
+### Fixed
+- Fixed a regression where some auto-converted dropped outfits could be processed twice and snap armature scale back unexpectedly (for example, back to 1.0).
+
 ## [0.0.3] - 2026-08-10
 
 ### Added

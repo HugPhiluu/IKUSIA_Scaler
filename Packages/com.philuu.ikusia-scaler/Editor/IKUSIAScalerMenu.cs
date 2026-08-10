@@ -76,6 +76,7 @@ namespace IKUSIAScaler.Editor
         private static readonly Dictionary<int, int> knownHierarchyParentIds = new Dictionary<int, int>();
         private static readonly HashSet<int> processedPrefabRootIds = new HashSet<int>();
         private static readonly HashSet<int> pendingPrefabRootIds = new HashSet<int>();
+        private static readonly HashSet<int> autoConvertedArmatureIds = new HashSet<int>();
         private static bool hierarchyTrackingInitialized;
 
         // All conversion profiles
@@ -1091,6 +1092,7 @@ namespace IKUSIAScaler.Editor
 
             processedPrefabRootIds.Clear();
             pendingPrefabRootIds.Clear();
+            autoConvertedArmatureIds.Clear();
             BuildHierarchySnapshot();
         }
 
@@ -1538,6 +1540,17 @@ namespace IKUSIAScaler.Editor
 
             AutoDetectLog($"Matched conversion profile: {profile.GetDisplayName()}");
 
+            Transform outfitArmature = FindArmature(prefabRoot.transform);
+            if (outfitArmature != null)
+            {
+                int armatureId = outfitArmature.gameObject.GetInstanceID();
+                if (autoConvertedArmatureIds.Contains(armatureId))
+                {
+                    AutoDetectLog($"Skipping duplicate auto conversion for already processed armature '{outfitArmature.name}' (ID: {armatureId}).");
+                    return AutoDetectionResult.Detected;
+                }
+            }
+
             TryShowAutoConversionDiscoveryPrompt(profile, prefabRoot.name);
 
             if (!IsAutomaticConversionEnabled())
@@ -1550,6 +1563,11 @@ namespace IKUSIAScaler.Editor
             bool applied = ApplyConversion(profile, prefabRoot, false);
             if (applied)
             {
+                if (outfitArmature != null)
+                {
+                    autoConvertedArmatureIds.Add(outfitArmature.gameObject.GetInstanceID());
+                }
+
                 Debug.Log($"[IKUSIA Scaler] Auto-applied conversion '{profile.GetDisplayName()}' to dropped prefab '{prefabRoot.name}'.");
                 AutoDetectLog("Auto conversion applied successfully.");
             }
@@ -1606,6 +1624,7 @@ namespace IKUSIAScaler.Editor
             BuildHierarchySnapshot();
             processedPrefabRootIds.Clear();
             pendingPrefabRootIds.Clear();
+            autoConvertedArmatureIds.Clear();
         }
 
         private static HashSet<int> CollectSceneObjectIds()
