@@ -2,6 +2,14 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.0.3] - 2026-08-10
+
+### Added
+- Updated armature conversion scaling to use the destination avatar armature scale as a baseline before applying profile multipliers, so resized avatars convert outfits more accurately.
+
+### Fixed
+- Improved auto-detection for dropped outfit prefabs by restricting source-avatar matching to the prefab's immediate containing folder.
+
 ## [0.0.2] - 2026-08-06
 
 ### Added
