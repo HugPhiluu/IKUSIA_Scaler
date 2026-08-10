@@ -584,8 +584,18 @@ namespace IKUSIAScaler.Editor
 
             // Apply armature scaling
             Vector3 previousScale = armature.localScale;
-            armature.localScale = MultiplyScale(armature.localScale, profile.armatureMultiplier);
-            DebugLog($"Armature scale changed: {previousScale} → {armature.localScale}");
+            Transform referenceArmature = FindReferenceAvatarArmature(selectedObject.transform, armature);
+            if (referenceArmature != null)
+            {
+                armature.localScale = MultiplyScale(referenceArmature.localScale, profile.armatureMultiplier);
+                DebugLog($"Armature scale changed using avatar reference '{referenceArmature.name}': {previousScale} → {armature.localScale}");
+            }
+            else
+            {
+                // Fallback when no avatar armature context is available.
+                armature.localScale = MultiplyScale(armature.localScale, profile.armatureMultiplier);
+                DebugLog($"Armature scale changed (fallback multiply): {previousScale} → {armature.localScale}");
+            }
 
             // Apply bone-specific scaling if defined
             bool allBonesFound = true;
@@ -684,6 +694,116 @@ namespace IKUSIAScaler.Editor
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// Finds the destination avatar armature to use as scaling baseline.
+        /// Excludes the selected outfit subtree so we don't accidentally use the outfit armature itself.
+        /// </summary>
+        private static Transform FindReferenceAvatarArmature(Transform selectedRoot, Transform outfitArmature)
+        {
+            if (selectedRoot == null)
+            {
+                return null;
+            }
+
+            Transform avatarRoot = selectedRoot.root;
+            if (avatarRoot == null)
+            {
+                return null;
+            }
+
+            Animator animator = avatarRoot.GetComponent<Animator>();
+            if (animator != null)
+            {
+                Transform hips = animator.GetBoneTransform(HumanBodyBones.Hips);
+                Transform fromHumanoidRig = FindArmatureFromBoneChain(hips, avatarRoot);
+                if (IsValidReferenceArmature(fromHumanoidRig, selectedRoot, outfitArmature))
+                {
+                    return fromHumanoidRig;
+                }
+            }
+
+            Transform fromNameSearch = FindArmatureExcludingSubtree(avatarRoot, selectedRoot);
+            if (IsValidReferenceArmature(fromNameSearch, selectedRoot, outfitArmature))
+            {
+                return fromNameSearch;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Walks up from a humanoid bone to find the closest armature root under the avatar root.
+        /// </summary>
+        private static Transform FindArmatureFromBoneChain(Transform startBone, Transform avatarRoot)
+        {
+            Transform current = startBone;
+            Transform bestMatch = null;
+
+            while (current != null && current != avatarRoot)
+            {
+                if (IsArmature(current.name))
+                {
+                    bestMatch = current;
+                }
+
+                current = current.parent;
+            }
+
+            return bestMatch;
+        }
+
+        /// <summary>
+        /// Finds an armature by name while skipping a subtree (typically the selected outfit root).
+        /// </summary>
+        private static Transform FindArmatureExcludingSubtree(Transform root, Transform excludedSubtreeRoot)
+        {
+            if (root == null)
+            {
+                return null;
+            }
+
+            if (excludedSubtreeRoot != null && root == excludedSubtreeRoot)
+            {
+                return null;
+            }
+
+            if (IsArmature(root.name))
+            {
+                return root;
+            }
+
+            foreach (Transform child in root)
+            {
+                Transform found = FindArmatureExcludingSubtree(child, excludedSubtreeRoot);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsValidReferenceArmature(Transform candidate, Transform selectedRoot, Transform outfitArmature)
+        {
+            if (candidate == null)
+            {
+                return false;
+            }
+
+            if (outfitArmature != null && candidate == outfitArmature)
+            {
+                return false;
+            }
+
+            if (selectedRoot != null && candidate.IsChildOf(selectedRoot))
+            {
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>
