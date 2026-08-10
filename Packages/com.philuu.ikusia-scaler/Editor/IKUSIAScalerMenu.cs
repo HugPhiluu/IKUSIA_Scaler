@@ -351,13 +351,25 @@ namespace IKUSIAScaler.Editor
             if (animator.avatar != null)
             {
                 searchCandidates.Add(animator.avatar.name);
-                searchCandidates.Add(AssetDatabase.GetAssetPath(animator.avatar));
+
+                string avatarAssetPath = AssetDatabase.GetAssetPath(animator.avatar);
+                if (!string.IsNullOrEmpty(avatarAssetPath))
+                {
+                    searchCandidates.Add(avatarAssetPath);
+                    AddPathSegmentsToCandidates(searchCandidates, avatarAssetPath);
+                }
             }
 
             if (animator.runtimeAnimatorController != null)
             {
                 searchCandidates.Add(animator.runtimeAnimatorController.name);
-                searchCandidates.Add(AssetDatabase.GetAssetPath(animator.runtimeAnimatorController));
+
+                string controllerAssetPath = AssetDatabase.GetAssetPath(animator.runtimeAnimatorController);
+                if (!string.IsNullOrEmpty(controllerAssetPath))
+                {
+                    searchCandidates.Add(controllerAssetPath);
+                    AddPathSegmentsToCandidates(searchCandidates, controllerAssetPath);
+                }
             }
 
             if (searchCandidates.Count == 0)
@@ -375,39 +387,64 @@ namespace IKUSIAScaler.Editor
                 return AvatarType.Unknown;
             }
 
-            string combined = string.Join(" ", candidates).ToLowerInvariant();
+            foreach (string candidate in candidates)
+            {
+                AvatarType detected = DetectAvatarTypeFromSingleCandidate(candidate);
+                if (detected != AvatarType.Unknown)
+                {
+                    return detected;
+                }
+            }
 
-            return DetectAvatarTypeFromCombinedText(combined);
+            return AvatarType.Unknown;
         }
 
-        private static AvatarType DetectAvatarTypeFromCombinedText(string combined)
+        private static AvatarType DetectAvatarTypeFromSingleCandidate(string candidate)
         {
-            if (string.IsNullOrEmpty(combined))
+            if (string.IsNullOrWhiteSpace(candidate))
             {
                 return AvatarType.Unknown;
             }
 
-            bool hasMizuki = combined.Contains("mizuki");
-            bool hasRurune = combined.Contains("rurune");
-            bool hasKaguya = combined.Contains("kaguya");
+            string normalized = candidate.ToLowerInvariant();
 
-            int matchCount = (hasMizuki ? 1 : 0) + (hasRurune ? 1 : 0) + (hasKaguya ? 1 : 0);
-            if (matchCount != 1)
-            {
-                return AvatarType.Unknown;
-            }
+            bool hasMizuki = normalized.Contains("mizuki");
+            bool hasRurune = normalized.Contains("rurune");
+            bool hasKaguya = normalized.Contains("kaguya");
 
-            if (hasMizuki)
+            if (hasMizuki && !hasRurune && !hasKaguya)
             {
                 return AvatarType.Mizuki;
             }
 
-            if (hasRurune)
+            if (hasRurune && !hasMizuki && !hasKaguya)
             {
                 return AvatarType.Rurune;
             }
 
-            return AvatarType.Kaguya;
+            if (hasKaguya && !hasMizuki && !hasRurune)
+            {
+                return AvatarType.Kaguya;
+            }
+
+            return AvatarType.Unknown;
+        }
+
+        private static void AddPathSegmentsToCandidates(List<string> candidates, string assetPath)
+        {
+            if (string.IsNullOrWhiteSpace(assetPath))
+            {
+                return;
+            }
+
+            string[] pathSegments = assetPath.Split('/');
+            foreach (string segment in pathSegments)
+            {
+                if (!string.IsNullOrWhiteSpace(segment))
+                {
+                    candidates.Add(segment);
+                }
+            }
         }
 
         private static AvatarType DetectAvatarTypeFromPrefab(GameObject prefabRoot)
@@ -434,13 +471,10 @@ namespace IKUSIAScaler.Editor
                         candidates.Add(fileName);
                     }
 
-                    string[] pathSegments = assetPath.Split('/');
-                    foreach (string segment in pathSegments)
+                    string containingFolder = Path.GetFileName(Path.GetDirectoryName(assetPath));
+                    if (!string.IsNullOrEmpty(containingFolder))
                     {
-                        if (!string.IsNullOrEmpty(segment))
-                        {
-                            candidates.Add(segment);
-                        }
+                        candidates.Add(containingFolder);
                     }
                 }
             }
