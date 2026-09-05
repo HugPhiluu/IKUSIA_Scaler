@@ -2,6 +2,16 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.0.5] - 2026-09-05
+
+### Added
+- Conversion now also respects the target avatar root armature's current scale when an outfit is converted under a resized avatar, so profile multipliers follow avatar-wide size adjustments. [[Only avatars rescaled through the armature scale are considered.]]
+
+### Fixed
+- Fixed armature profile application to multiply the selected outfit armature's current scale instead of using another avatar armature as the baseline, which corrected oversized results on already-scaled prefabs.
+- Fixed automatic dropped-prefab detection to evaluate the nearest prefab instance root first, so outfits dropped under avatar prefab instances are still detected and converted.
+- Fixed automatic conversion being skipped for outfits whose Armature already had a non-unit default scale.
+
 ## [0.0.4] - 2026-08-10
 
 ### Fixed

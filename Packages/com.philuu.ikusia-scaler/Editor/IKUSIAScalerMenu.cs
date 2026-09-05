@@ -585,18 +585,19 @@ namespace IKUSIAScaler.Editor
 
             // Apply armature scaling
             Vector3 previousScale = armature.localScale;
-            Transform referenceArmature = FindReferenceAvatarArmature(selectedObject.transform, armature);
-            if (referenceArmature != null)
+            Transform targetAvatarArmature = FindTargetAvatarArmature(selectedObject.transform, armature);
+            Vector3 convertedScale = MultiplyScale(previousScale, profile.armatureMultiplier);
+            if (targetAvatarArmature != null)
             {
-                armature.localScale = MultiplyScale(referenceArmature.localScale, profile.armatureMultiplier);
-                DebugLog($"Armature scale changed using avatar reference '{referenceArmature.name}': {previousScale} → {armature.localScale}");
+                convertedScale = MultiplyScale(convertedScale, targetAvatarArmature.localScale);
+                DebugLog($"Armature scale changed using target avatar armature scale '{targetAvatarArmature.name}' ({targetAvatarArmature.localScale}): {previousScale} → {convertedScale}");
             }
             else
             {
-                // Fallback when no avatar armature context is available.
-                armature.localScale = MultiplyScale(armature.localScale, profile.armatureMultiplier);
-                DebugLog($"Armature scale changed (fallback multiply): {previousScale} → {armature.localScale}");
+                DebugLog($"Armature scale changed using profile multiplier only: {previousScale} → {convertedScale}");
             }
+
+            armature.localScale = convertedScale;
 
             // Apply bone-specific scaling if defined
             bool allBonesFound = true;
@@ -628,6 +629,11 @@ namespace IKUSIAScaler.Editor
             string resultMessage = $"Applied {profile.GetDisplayName()} conversion to '{selectedObject.name}'.\n\n" +
                                    $"Armature: {armature.name}\n" +
                                    $"Scale multiplier: {profile.armatureMultiplier}";
+
+            if (targetAvatarArmature != null)
+            {
+                resultMessage += $"\nTarget avatar armature scale: X {targetAvatarArmature.localScale.x:F4}, Y {targetAvatarArmature.localScale.y:F4}, Z {targetAvatarArmature.localScale.z:F4}";
+            }
 
             if (profile.boneMultipliers.Count > 0)
             {
@@ -698,10 +704,10 @@ namespace IKUSIAScaler.Editor
         }
 
         /// <summary>
-        /// Finds the destination avatar armature to use as scaling baseline.
-        /// Excludes the selected outfit subtree so we don't accidentally use the outfit armature itself.
+        /// Finds the avatar root armature for the selected outfit so target avatar scaling can be preserved.
+        /// Excludes the selected outfit subtree to avoid picking the outfit armature itself.
         /// </summary>
-        private static Transform FindReferenceAvatarArmature(Transform selectedRoot, Transform outfitArmature)
+        private static Transform FindTargetAvatarArmature(Transform selectedRoot, Transform outfitArmature)
         {
             if (selectedRoot == null)
             {
@@ -709,7 +715,7 @@ namespace IKUSIAScaler.Editor
             }
 
             Transform avatarRoot = selectedRoot.root;
-            if (avatarRoot == null)
+            if (avatarRoot == null || avatarRoot == selectedRoot)
             {
                 return null;
             }
@@ -719,14 +725,14 @@ namespace IKUSIAScaler.Editor
             {
                 Transform hips = animator.GetBoneTransform(HumanBodyBones.Hips);
                 Transform fromHumanoidRig = FindArmatureFromBoneChain(hips, avatarRoot);
-                if (IsValidReferenceArmature(fromHumanoidRig, selectedRoot, outfitArmature))
+                if (IsValidTargetAvatarArmature(fromHumanoidRig, selectedRoot, outfitArmature))
                 {
                     return fromHumanoidRig;
                 }
             }
 
             Transform fromNameSearch = FindArmatureExcludingSubtree(avatarRoot, selectedRoot);
-            if (IsValidReferenceArmature(fromNameSearch, selectedRoot, outfitArmature))
+            if (IsValidTargetAvatarArmature(fromNameSearch, selectedRoot, outfitArmature))
             {
                 return fromNameSearch;
             }
@@ -734,9 +740,6 @@ namespace IKUSIAScaler.Editor
             return null;
         }
 
-        /// <summary>
-        /// Walks up from a humanoid bone to find the closest armature root under the avatar root.
-        /// </summary>
         private static Transform FindArmatureFromBoneChain(Transform startBone, Transform avatarRoot)
         {
             Transform current = startBone;
@@ -755,9 +758,6 @@ namespace IKUSIAScaler.Editor
             return bestMatch;
         }
 
-        /// <summary>
-        /// Finds an armature by name while skipping a subtree (typically the selected outfit root).
-        /// </summary>
         private static Transform FindArmatureExcludingSubtree(Transform root, Transform excludedSubtreeRoot)
         {
             if (root == null)
@@ -787,7 +787,7 @@ namespace IKUSIAScaler.Editor
             return null;
         }
 
-        private static bool IsValidReferenceArmature(Transform candidate, Transform selectedRoot, Transform outfitArmature)
+        private static bool IsValidTargetAvatarArmature(Transform candidate, Transform selectedRoot, Transform outfitArmature)
         {
             if (candidate == null)
             {
@@ -853,8 +853,8 @@ namespace IKUSIAScaler.Editor
             {
                 if (!showUserDialogs)
                 {
-                    Debug.LogWarning($"[IKUSIA Scaler] Skipped automatic conversion for '{selectedRoot.name}' because Armature '{armature.name}' is already scaled.");
-                    return false;
+                    AutoDetectLog($"Continuing automatic conversion for '{selectedRoot.name}' even though Armature '{armature.name}' is already scaled: {armature.localScale}");
+                    return true;
                 }
 
                 string scaleWarningMessage =
@@ -1047,6 +1047,15 @@ namespace IKUSIAScaler.Editor
                 currentScale.x * multiplier,
                 currentScale.y * multiplier,
                 currentScale.z * multiplier
+            );
+        }
+
+        private static Vector3 MultiplyScale(Vector3 currentScale, Vector3 multiplier)
+        {
+            return new Vector3(
+                currentScale.x * multiplier.x,
+                currentScale.y * multiplier.y,
+                currentScale.z * multiplier.z
             );
         }
 
@@ -1436,7 +1445,12 @@ namespace IKUSIAScaler.Editor
                 return;
             }
 
-            GameObject prefabRoot = PrefabUtility.GetOutermostPrefabInstanceRoot(addedObject);
+            GameObject prefabRoot = PrefabUtility.GetNearestPrefabInstanceRoot(addedObject);
+            if (prefabRoot == null)
+            {
+                prefabRoot = PrefabUtility.GetOutermostPrefabInstanceRoot(addedObject);
+            }
+
             if (prefabRoot == null)
             {
                 return;
@@ -1454,7 +1468,7 @@ namespace IKUSIAScaler.Editor
             }
 
             pendingPrefabRootIds.Add(prefabRootId);
-            AutoDetectLog($"Queued prefab root for evaluation: '{prefabRoot.name}' (ID: {prefabRootId})");
+            AutoDetectLog($"Queued prefab root for evaluation: '{prefabRoot.name}' from changed object '{addedObject.name}' (ID: {prefabRootId})");
         }
 
         private static void EvaluatePendingPrefabRoots()
