@@ -1437,6 +1437,29 @@ namespace IKUSIAScaler.Editor
             EvaluatePendingPrefabRoots();
         }
 
+        private static bool IsNestedInsideAnotherPrefabInstanceRoot(GameObject prefabRoot)
+        {
+            if (prefabRoot == null)
+            {
+                return false;
+            }
+
+            Transform current = prefabRoot.transform.parent;
+            while (current != null)
+            {
+                GameObject parentObject = current.gameObject;
+                if (PrefabUtility.IsAnyPrefabInstanceRoot(parentObject))
+                {
+                    AutoDetectLog($"Skipping auto-detection for nested prefab instance '{prefabRoot.name}' because it is already contained inside another prefab instance root '{parentObject.name}'.");
+                    return true;
+                }
+
+                current = current.parent;
+            }
+
+            return false;
+        }
+
         private static void QueuePrefabRootForAutoDetection(int objectId, HashSet<int> seenRoots)
         {
             GameObject addedObject = EditorUtility.InstanceIDToObject(objectId) as GameObject;
@@ -1452,6 +1475,11 @@ namespace IKUSIAScaler.Editor
             }
 
             if (prefabRoot == null)
+            {
+                return;
+            }
+
+            if (IsNestedInsideAnotherPrefabInstanceRoot(prefabRoot))
             {
                 return;
             }

@@ -2,6 +2,12 @@
 
 All notable changes to this package are documented in this file.
 
+## [0.0.6] - 2026-09-10
+
+### Fixed
+- Fixed automatic conversion so it only runs when an outfit prefab is dropped onto an avatar prefab, and no longer triggers again for nested prefab instances already contained within the avatar prefab.
+- Prevented auto-detection from reprocessing outfit prefabs that are already nested under another prefab instance root.
+
 ## [0.0.5] - 2026-09-05
 
 ### Added
