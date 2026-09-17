@@ -11,6 +11,11 @@ IKUSIA Scaler
 [shields-build-listing]: https://img.shields.io/github/actions/workflow/status/HugPhiluu/IKUSIA_Scaler/build-listing.yml?label=Build%20Listing
 [shields-license]: https://img.shields.io/badge/License-MIT-green.svg
 
+
+<p align="center">
+	<img src="IKUSIA_Scaler.png" alt="IKUSIA Scaler cover image" width="360" />
+</p>
+
 Lightweight Unity Editor utility for VRChat avatar creators.
 IKUSIA Scaler quickly rescales imported outfit assets between compatible IKUSIA avatar bodies (Mizuki, Rurune, and Kaguya), with both manual menu conversion and automatic detection support.
 
