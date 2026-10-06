@@ -6,7 +6,7 @@ All notable changes to this package are documented in this file.
 
 - No unreleased changes yet.
 
-## [0.0.7-beta.1] - 2026-10-06
+## [0.0.7-beta.2] - 2026-10-06
 
 Beta release.
 
