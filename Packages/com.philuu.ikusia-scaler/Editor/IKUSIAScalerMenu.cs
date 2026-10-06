@@ -71,12 +71,15 @@ namespace IKUSIAScaler.Editor
         private const string AUTO_CONVERT_ENABLED_KEY = "IKUSIA_Scaler_AutoConvertEnabled";
         private const string AUTO_CONVERT_DISCOVERY_PROMPT_DONE_KEY = "IKUSIA_Scaler_AutoConvertDiscoveryPromptDone";
         private const string AUTO_DETECTION_TRACE_LOGGING_ENABLED_KEY = "IKUSIA_Scaler_AutoDetectTraceLoggingEnabled";
+        private const int MAX_PENDING_PREFAB_RETRY_COUNT = 8;
 
         private static readonly HashSet<int> knownHierarchyObjectIds = new HashSet<int>();
         private static readonly Dictionary<int, int> knownHierarchyParentIds = new Dictionary<int, int>();
         private static readonly HashSet<int> processedPrefabRootIds = new HashSet<int>();
         private static readonly HashSet<int> pendingPrefabRootIds = new HashSet<int>();
+        private static readonly Dictionary<int, int> pendingPrefabRetryCounts = new Dictionary<int, int>();
         private static readonly HashSet<string> autoConvertedPrefabProfileKeys = new HashSet<string>();
+        private static bool pendingEvaluationRetryScheduled;
         private static bool hierarchyTrackingInitialized;
 
         // All conversion profiles
@@ -1140,6 +1143,8 @@ namespace IKUSIAScaler.Editor
 
             processedPrefabRootIds.Clear();
             pendingPrefabRootIds.Clear();
+            pendingPrefabRetryCounts.Clear();
+            pendingEvaluationRetryScheduled = false;
             autoConvertedPrefabProfileKeys.Clear();
             BuildHierarchySnapshot();
         }
@@ -1560,11 +1565,29 @@ namespace IKUSIAScaler.Editor
 
                 AutoDetectionResult result = EvaluateAutoConversionForDroppedPrefab(prefabRoot);
                 AutoDetectLog($"Evaluation result for '{prefabRoot.name}': {result}");
+
+                if (result == AutoDetectionResult.NoTargetMatch)
+                {
+                    int retryCount;
+                    pendingPrefabRetryCounts.TryGetValue(prefabRootId, out retryCount);
+                    retryCount++;
+                    pendingPrefabRetryCounts[prefabRootId] = retryCount;
+
+                    if (retryCount >= MAX_PENDING_PREFAB_RETRY_COUNT)
+                    {
+                        AutoDetectLog($"Stopping pending evaluation for '{prefabRoot.name}' after {retryCount} retries without a target avatar match.");
+                        resolvedIds.Add(prefabRootId);
+                    }
+
+                    continue;
+                }
+
                 if (result == AutoDetectionResult.Detected ||
                     result == AutoDetectionResult.NoSourceMatch ||
                     result == AutoDetectionResult.SameAvatar ||
                     result == AutoDetectionResult.NoProfile)
                 {
+                    pendingPrefabRetryCounts.Remove(prefabRootId);
                     processedPrefabRootIds.Add(prefabRootId);
                     resolvedIds.Add(prefabRootId);
                 }
@@ -1573,7 +1596,34 @@ namespace IKUSIAScaler.Editor
             foreach (int resolvedId in resolvedIds)
             {
                 pendingPrefabRootIds.Remove(resolvedId);
+                pendingPrefabRetryCounts.Remove(resolvedId);
             }
+
+            if (pendingPrefabRootIds.Count > 0)
+            {
+                SchedulePendingPrefabRootRetry();
+            }
+        }
+
+        private static void SchedulePendingPrefabRootRetry()
+        {
+            if (pendingEvaluationRetryScheduled)
+            {
+                return;
+            }
+
+            pendingEvaluationRetryScheduled = true;
+            EditorApplication.delayCall += () =>
+            {
+                pendingEvaluationRetryScheduled = false;
+
+                if (EditorApplication.isCompiling || EditorApplication.isUpdating || EditorApplication.isPlayingOrWillChangePlaymode)
+                {
+                    return;
+                }
+
+                EvaluatePendingPrefabRoots();
+            };
         }
 
         private static AutoDetectionResult EvaluateAutoConversionForDroppedPrefab(GameObject prefabRoot)
@@ -1698,6 +1748,8 @@ namespace IKUSIAScaler.Editor
             BuildHierarchySnapshot();
             processedPrefabRootIds.Clear();
             pendingPrefabRootIds.Clear();
+            pendingPrefabRetryCounts.Clear();
+            pendingEvaluationRetryScheduled = false;
             autoConvertedPrefabProfileKeys.Clear();
         }
 

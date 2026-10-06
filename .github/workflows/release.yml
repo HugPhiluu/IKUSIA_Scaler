@@ -2,6 +2,11 @@ name: Build Release
 
 on: 
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "Packages/com.philuu.ikusia-scaler/package.json"
 
 jobs:
 
@@ -22,16 +27,56 @@ jobs:
           echo "configPackage=false" >> $GITHUB_OUTPUT;
         fi
 
+  # Detect whether package.json version changed (for push events)
+  detect_version_change:
+    needs: config
+    runs-on: ubuntu-latest
+    if: needs.config.outputs.config_package == 'true'
+    outputs:
+      version_changed: ${{ steps.version_check.outputs.version_changed }}
+    env:
+      packagePath: Packages/${{ vars.PACKAGE_NAME }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@3df4ab11eba7bda6032a0b82a6bb43b11571feac
+      with:
+        fetch-depth: 0
+
+    - name: Check if version changed
+      id: version_check
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "version_changed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        file="${{ env.packagePath }}/package.json"
+        old_version=""
+        new_version="$(jq -r '.version // empty' "$file")"
+
+        if git cat-file -e "${{ github.event.before }}:$file" 2>/dev/null; then
+          old_version="$(git show "${{ github.event.before }}:$file" | jq -r '.version // empty')"
+        fi
+
+        if [ -n "$new_version" ] && [ "$old_version" != "$new_version" ]; then
+          echo "version_changed=true" >> "$GITHUB_OUTPUT"
+          echo "Version changed: '$old_version' -> '$new_version'"
+        else
+          echo "version_changed=false" >> "$GITHUB_OUTPUT"
+          echo "Version unchanged: '$new_version'"
+        fi
+
   # Build and release the Package
   # If the repository is not configured properly, this job will be skipped
   build:
-    needs: config
+    needs: [config, detect_version_change]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       packagePath: Packages/${{ vars.PACKAGE_NAME }}
-    if: needs.config.outputs.config_package == 'true'
+    if: needs.config.outputs.config_package == 'true' && needs.detect_version_change.outputs.version_changed == 'true'
     steps:
 
       # Checkout Local Repository

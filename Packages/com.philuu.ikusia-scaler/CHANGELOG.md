@@ -6,6 +6,12 @@ All notable changes to this package are documented in this file.
 
 - No unreleased changes yet.
 
+## [1.0.2] - 2026-10-06
+
+### Fixed
+- Fixed automatic conversion reliability for outfits dropped directly from the Project window onto an avatar, so target-avatar detection is retried automatically when hierarchy context is not ready on the first frame.
+- Fixed a hierarchy-timing edge case where conversion could wait for a second manual move before applying.
+
 ## [1.0.1] - 2026-10-06
 
 ### Added
