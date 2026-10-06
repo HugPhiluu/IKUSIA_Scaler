@@ -316,7 +316,7 @@ namespace IKUSIAScaler.Editor
             Transform avatarRoot = FindNearestAvatarRoot(selectedTransform);
             if (avatarRoot == null)
             {
-                avatarRoot = selectedTransform.root;
+                return AvatarType.Unknown;
             }
 
             return DetectAvatarTypeFromAvatarRoot(avatarRoot);
@@ -327,7 +327,8 @@ namespace IKUSIAScaler.Editor
             Transform current = startTransform;
             while (current != null)
             {
-                if (current.GetComponent<Animator>() != null)
+                Animator animator = current.GetComponent<Animator>();
+                if (animator != null && DetectAvatarTypeFromAnimator(current, animator) != AvatarType.Unknown)
                 {
                     return current;
                 }

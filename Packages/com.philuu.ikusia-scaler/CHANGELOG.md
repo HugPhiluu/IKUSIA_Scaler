@@ -6,6 +6,17 @@ All notable changes to this package are documented in this file.
 
 - No unreleased changes yet.
 
+## [1.0.1] - 2026-10-06
+
+### Added
+- Added stricter supported-avatar detection for the avatar root: the tool now checks the ancestor object itself for an Animator and validates the animator avatar against the supported IKUSIA models before treating it as the active avatar root.
+- Added safer automatic outfit detection for supported avatar hierarchies, reducing false positives from unrelated child objects or container transforms.
+
+### Fixed
+- Fixed avatar-root detection to be deterministic and avoid child-object ambiguity when identifying the active avatar.
+- Fixed fallback behavior so supported avatar roots are found consistently even when the avatar is nested inside a collection or wrapper object.
+- Fixed release/version labeling to keep the package metadata aligned with a stable published release.
+
 ## [1.0.0] - 2026-10-06
 
 Initial stable release.
