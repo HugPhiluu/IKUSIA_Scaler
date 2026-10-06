@@ -2,6 +2,21 @@
 
 All notable changes to this package are documented in this file.
 
+## [Unreleased]
+
+- No unreleased changes yet.
+
+## [0.0.7-beta.1] - 2026-10-06
+
+Beta release.
+
+### Fixed
+- Fixed target-avatar detection to use the nearest ancestor avatar root with an Animator instead of only the top-level scene root, improving both manual validation and automatic conversion under container objects.
+- Fixed dropped outfit detection so outfit prefabs nested under an existing avatar prefab instance are eligible for auto-conversion, while nested prefab content that arrived as part of a newly instantiated parent prefab is still ignored.
+- Fixed source-avatar detection precedence so the immediate containing folder and prefab identity are considered before broader asset path text, reducing ancestor-folder misidentification.
+- Fixed duplicate auto-conversion protection to track dropped prefab/profile pairs instead of armature instance IDs alone, reducing repeated scale application during hierarchy refreshes.
+- Fixed prefab-instance scale persistence by explicitly recording transform override modifications after armature and bone scaling changes.
+
 ## [0.0.6] - 2026-09-10
 
 ### Fixed

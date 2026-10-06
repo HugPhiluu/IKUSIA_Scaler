@@ -76,7 +76,7 @@ namespace IKUSIAScaler.Editor
         private static readonly Dictionary<int, int> knownHierarchyParentIds = new Dictionary<int, int>();
         private static readonly HashSet<int> processedPrefabRootIds = new HashSet<int>();
         private static readonly HashSet<int> pendingPrefabRootIds = new HashSet<int>();
-        private static readonly HashSet<int> autoConvertedArmatureIds = new HashSet<int>();
+        private static readonly HashSet<string> autoConvertedPrefabProfileKeys = new HashSet<string>();
         private static bool hierarchyTrackingInitialized;
 
         // All conversion profiles
@@ -313,9 +313,29 @@ namespace IKUSIAScaler.Editor
                 return AvatarType.Unknown;
             }
 
-            // Strict mode: only use the Animator on the selected hierarchy's top-level root.
-            Transform avatarRoot = selectedTransform.root;
+            Transform avatarRoot = FindNearestAvatarRoot(selectedTransform);
+            if (avatarRoot == null)
+            {
+                avatarRoot = selectedTransform.root;
+            }
+
             return DetectAvatarTypeFromAvatarRoot(avatarRoot);
+        }
+
+        private static Transform FindNearestAvatarRoot(Transform startTransform)
+        {
+            Transform current = startTransform;
+            while (current != null)
+            {
+                if (current.GetComponent<Animator>() != null)
+                {
+                    return current;
+                }
+
+                current = current.parent;
+            }
+
+            return null;
         }
 
         private static AvatarType DetectAvatarTypeFromAvatarRoot(Transform avatarRoot)
@@ -356,8 +376,8 @@ namespace IKUSIAScaler.Editor
                 string avatarAssetPath = AssetDatabase.GetAssetPath(animator.avatar);
                 if (!string.IsNullOrEmpty(avatarAssetPath))
                 {
-                    searchCandidates.Add(avatarAssetPath);
                     AddPathSegmentsToCandidates(searchCandidates, avatarAssetPath);
+                    searchCandidates.Add(avatarAssetPath);
                 }
             }
 
@@ -368,8 +388,8 @@ namespace IKUSIAScaler.Editor
                 string controllerAssetPath = AssetDatabase.GetAssetPath(animator.runtimeAnimatorController);
                 if (!string.IsNullOrEmpty(controllerAssetPath))
                 {
-                    searchCandidates.Add(controllerAssetPath);
                     AddPathSegmentsToCandidates(searchCandidates, controllerAssetPath);
+                    searchCandidates.Add(controllerAssetPath);
                 }
             }
 
@@ -460,11 +480,16 @@ namespace IKUSIAScaler.Editor
             GameObject sourcePrefab = PrefabUtility.GetCorrespondingObjectFromSource(prefabRoot);
             if (sourcePrefab != null)
             {
-                candidates.Add(sourcePrefab.name);
                 string assetPath = AssetDatabase.GetAssetPath(sourcePrefab);
                 if (!string.IsNullOrEmpty(assetPath))
                 {
-                    candidates.Add(assetPath);
+                    string containingFolder = Path.GetFileName(Path.GetDirectoryName(assetPath));
+                    if (!string.IsNullOrEmpty(containingFolder))
+                    {
+                        candidates.Add(containingFolder);
+                    }
+
+                    candidates.Add(sourcePrefab.name);
 
                     string fileName = Path.GetFileNameWithoutExtension(assetPath);
                     if (!string.IsNullOrEmpty(fileName))
@@ -472,11 +497,12 @@ namespace IKUSIAScaler.Editor
                         candidates.Add(fileName);
                     }
 
-                    string containingFolder = Path.GetFileName(Path.GetDirectoryName(assetPath));
-                    if (!string.IsNullOrEmpty(containingFolder))
-                    {
-                        candidates.Add(containingFolder);
-                    }
+                    AddPathSegmentsToCandidates(candidates, assetPath);
+                    candidates.Add(assetPath);
+                }
+                else
+                {
+                    candidates.Add(sourcePrefab.name);
                 }
             }
 
@@ -598,6 +624,7 @@ namespace IKUSIAScaler.Editor
             }
 
             armature.localScale = convertedScale;
+            RecordPrefabTransformOverride(armature);
 
             // Apply bone-specific scaling if defined
             bool allBonesFound = true;
@@ -615,6 +642,7 @@ namespace IKUSIAScaler.Editor
 
                     Vector3 previousBoneScale = bone.localScale;
                     bone.localScale = MultiplyScale(bone.localScale, multiplier);
+                    RecordPrefabTransformOverride(bone);
                     DebugLog($"{boneName} scale changed: {previousBoneScale} → {bone.localScale}");
                 }
                 else
@@ -714,7 +742,7 @@ namespace IKUSIAScaler.Editor
                 return null;
             }
 
-            Transform avatarRoot = selectedRoot.root;
+            Transform avatarRoot = FindNearestAvatarRoot(selectedRoot);
             if (avatarRoot == null || avatarRoot == selectedRoot)
             {
                 return null;
@@ -1059,6 +1087,16 @@ namespace IKUSIAScaler.Editor
             );
         }
 
+        private static void RecordPrefabTransformOverride(Transform target)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            PrefabUtility.RecordPrefabInstancePropertyModifications(target);
+        }
+
         private static UILanguage GetCurrentLanguage()
         {
             string stored = EditorPrefs.GetString(LANGUAGE_PREF_KEY, UILanguage.English.ToString());
@@ -1101,7 +1139,7 @@ namespace IKUSIAScaler.Editor
 
             processedPrefabRootIds.Clear();
             pendingPrefabRootIds.Clear();
-            autoConvertedArmatureIds.Clear();
+            autoConvertedPrefabProfileKeys.Clear();
             BuildHierarchySnapshot();
         }
 
@@ -1424,43 +1462,43 @@ namespace IKUSIAScaler.Editor
             }
 
             HashSet<int> seenRoots = new HashSet<int>();
+            HashSet<int> addedIdSet = new HashSet<int>(addedIds);
             foreach (int id in addedIds)
             {
-                QueuePrefabRootForAutoDetection(id, seenRoots);
+                QueuePrefabRootForAutoDetection(id, seenRoots, addedIdSet);
             }
 
             foreach (int id in parentChangedIds)
             {
-                QueuePrefabRootForAutoDetection(id, seenRoots);
+                QueuePrefabRootForAutoDetection(id, seenRoots, addedIdSet);
             }
 
             EvaluatePendingPrefabRoots();
         }
 
-        private static bool IsNestedInsideAnotherPrefabInstanceRoot(GameObject prefabRoot)
+        private static bool IsEmbeddedInNewlyAddedParentPrefab(GameObject prefabRoot, HashSet<int> addedObjectIds)
         {
-            if (prefabRoot == null)
+            if (prefabRoot == null || addedObjectIds == null || addedObjectIds.Count == 0)
             {
                 return false;
             }
 
-            Transform current = prefabRoot.transform.parent;
-            while (current != null)
+            GameObject outermostPrefabRoot = PrefabUtility.GetOutermostPrefabInstanceRoot(prefabRoot);
+            if (outermostPrefabRoot == null || outermostPrefabRoot == prefabRoot)
             {
-                GameObject parentObject = current.gameObject;
-                if (PrefabUtility.IsAnyPrefabInstanceRoot(parentObject))
-                {
-                    AutoDetectLog($"Skipping auto-detection for nested prefab instance '{prefabRoot.name}' because it is already contained inside another prefab instance root '{parentObject.name}'.");
-                    return true;
-                }
+                return false;
+            }
 
-                current = current.parent;
+            if (addedObjectIds.Contains(outermostPrefabRoot.GetInstanceID()))
+            {
+                AutoDetectLog($"Skipping auto-detection for nested prefab instance '{prefabRoot.name}' because it was added as part of parent prefab instance '{outermostPrefabRoot.name}'.");
+                return true;
             }
 
             return false;
         }
 
-        private static void QueuePrefabRootForAutoDetection(int objectId, HashSet<int> seenRoots)
+        private static void QueuePrefabRootForAutoDetection(int objectId, HashSet<int> seenRoots, HashSet<int> addedObjectIds)
         {
             GameObject addedObject = EditorUtility.InstanceIDToObject(objectId) as GameObject;
             if (addedObject == null || !addedObject.scene.IsValid())
@@ -1479,7 +1517,7 @@ namespace IKUSIAScaler.Editor
                 return;
             }
 
-            if (IsNestedInsideAnotherPrefabInstanceRoot(prefabRoot))
+            if (IsEmbeddedInNewlyAddedParentPrefab(prefabRoot, addedObjectIds))
             {
                 return;
             }
@@ -1582,15 +1620,11 @@ namespace IKUSIAScaler.Editor
 
             AutoDetectLog($"Matched conversion profile: {profile.GetDisplayName()}");
 
-            Transform outfitArmature = FindArmature(prefabRoot.transform);
-            if (outfitArmature != null)
+            string autoConversionKey = BuildAutoConversionKey(prefabRoot, profile);
+            if (autoConvertedPrefabProfileKeys.Contains(autoConversionKey))
             {
-                int armatureId = outfitArmature.gameObject.GetInstanceID();
-                if (autoConvertedArmatureIds.Contains(armatureId))
-                {
-                    AutoDetectLog($"Skipping duplicate auto conversion for already processed armature '{outfitArmature.name}' (ID: {armatureId}).");
-                    return AutoDetectionResult.Detected;
-                }
+                AutoDetectLog($"Skipping duplicate auto conversion for already processed prefab '{prefabRoot.name}' with profile '{profile.GetDisplayName()}'.");
+                return AutoDetectionResult.Detected;
             }
 
             TryShowAutoConversionDiscoveryPrompt(profile, prefabRoot.name);
@@ -1605,10 +1639,7 @@ namespace IKUSIAScaler.Editor
             bool applied = ApplyConversion(profile, prefabRoot, false);
             if (applied)
             {
-                if (outfitArmature != null)
-                {
-                    autoConvertedArmatureIds.Add(outfitArmature.gameObject.GetInstanceID());
-                }
+                autoConvertedPrefabProfileKeys.Add(autoConversionKey);
 
                 Debug.Log($"[IKUSIA Scaler] Auto-applied conversion '{profile.GetDisplayName()}' to dropped prefab '{prefabRoot.name}'.");
                 AutoDetectLog("Auto conversion applied successfully.");
@@ -1666,7 +1697,17 @@ namespace IKUSIAScaler.Editor
             BuildHierarchySnapshot();
             processedPrefabRootIds.Clear();
             pendingPrefabRootIds.Clear();
-            autoConvertedArmatureIds.Clear();
+            autoConvertedPrefabProfileKeys.Clear();
+        }
+
+        private static string BuildAutoConversionKey(GameObject prefabRoot, ScalingProfile profile)
+        {
+            if (prefabRoot == null || profile == null)
+            {
+                return string.Empty;
+            }
+
+            return $"{prefabRoot.GetInstanceID()}::{profile.sourceAvatar}->{profile.targetAvatar}";
         }
 
         private static HashSet<int> CollectSceneObjectIds()

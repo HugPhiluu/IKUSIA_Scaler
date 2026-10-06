@@ -6,6 +6,10 @@ IKUSIA Scaler
 [![Build Listing][shields-build-listing]][github-actions-listing]
 [![License: MIT][shields-license]][license]
 
+<p align="center">
+	<img src="IKUSIA_Scaler.png" alt="IKUSIA Scaler cover image" width="720" />
+</p>
+
 [shields-latest-release]: https://img.shields.io/github/v/release/HugPhiluu/IKUSIA_Scaler?display_name=tag&sort=semver
 [shields-build-release]: https://img.shields.io/github/actions/workflow/status/HugPhiluu/IKUSIA_Scaler/release.yml?label=Build%20Release
 [shields-build-listing]: https://img.shields.io/github/actions/workflow/status/HugPhiluu/IKUSIA_Scaler/build-listing.yml?label=Build%20Listing
@@ -59,10 +63,12 @@ When enabled in `Window > IKUSIA Scaler Settings`, the tool watches hierarchy ch
 
 It attempts to:
 
-1. Detect outfit source avatar from prefab name and asset path hints.
-2. Detect target avatar from the destination avatar root context.
+1. Detect outfit source avatar from the prefab name and its immediate containing folder before falling back to broader asset path hints.
+2. Detect target avatar from the nearest destination avatar root context, even when the avatar is nested under container objects.
 3. Match a known conversion profile.
 4. Apply conversion automatically when safe.
+
+Automatic conversion is allowed for outfit prefabs dropped anywhere under the nearest detected avatar root. Prefabs that were simply brought in as part of a newly instantiated parent prefab are ignored so nested content is not reprocessed accidentally.
 
 Automatic conversion can be turned off, if manual operation is preferred.
 
@@ -85,6 +91,7 @@ Before conversion, IKUSIA Scaler includes guardrails:
 - Warns if Armature scale is already away from near unit scale (`1,1,1`) to reduce accidental stacked scaling.
 
 Automatic conversion runs with conservative behavior and skips unsafe cases rather than forcing dialogs.
+The tool also prevents the same dropped prefab/profile pair from being multiplied repeatedly during hierarchy refreshes.
 
 ## Settings
 

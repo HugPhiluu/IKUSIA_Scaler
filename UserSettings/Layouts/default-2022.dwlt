@@ -19,7 +19,7 @@ MonoBehaviour:
     width: 2560
     height: 1349
   m_ShowMode: 4
-  m_Title: Scene
+  m_Title: Hierarchy
   m_RootView: {fileID: 2}
   m_MinSize: {x: 875, y: 592}
   m_MaxSize: {x: 10000, y: 10000}
@@ -272,8 +272,8 @@ MonoBehaviour:
     y: 0
     width: 506
     height: 1299
-  m_MinSize: {x: 275, y: 50}
-  m_MaxSize: {x: 4000, y: 4000}
+  m_MinSize: {x: 276, y: 71}
+  m_MaxSize: {x: 4001, y: 4021}
   m_ActualView: {fileID: 12}
   m_Panes:
   - {fileID: 12}
@@ -365,23 +365,23 @@ MonoBehaviour:
   m_SceneHierarchy:
     m_TreeViewState:
       scrollPos: {x: 0, y: 0}
-      m_SelectedIDs: 0e2dffff
-      m_LastClickedID: -54002
-      m_ExpandedIDs: 123dffff7e45ffff4a5effff6e7cffffc895fffff29effffb8faffff
+      m_SelectedIDs: 
+      m_LastClickedID: 0
+      m_ExpandedIDs: f0fefeffb20effffd26bffff98a2ffff50d3ffff78daffffc6f8ffffe8faffff
       m_RenameOverlay:
         m_UserAcceptedRename: 0
-        m_Name: Yogarasu_Rurune
-        m_OriginalName: Yogarasu_Rurune
+        m_Name: 
+        m_OriginalName: 
         m_EditFieldRect:
           serializedVersion: 2
           x: 0
           y: 0
           width: 0
           height: 0
-        m_UserData: -47746
+        m_UserData: 0
         m_IsWaitingForDelay: 0
         m_IsRenaming: 0
-        m_OriginalEventType: 4
+        m_OriginalEventType: 11
         m_IsRenamingFilename: 0
         m_ClientGUIView: {fileID: 8}
       m_SearchString: 
@@ -798,7 +798,7 @@ MonoBehaviour:
   m_Rotation:
     m_Target: {x: 0.002165083, y: 0.9976469, z: -0.03773817, w: 0.057228528}
     speed: 2
-    m_Value: {x: 0.0021084698, y: 0.99772996, z: -0.03774131, w: 0.0557319}
+    m_Value: {x: 0.0021650793, y: 0.99764526, z: -0.037738107, w: 0.05722843}
   m_Size:
     m_Target: 1.056492
     speed: 2
@@ -1111,10 +1111,10 @@ MonoBehaviour:
   m_LockTracker:
     m_IsLocked: 0
   m_FolderTreeState:
-    scrollPos: {x: 0, y: 645}
-    m_SelectedIDs: 128d0000
-    m_LastClickedID: 36114
-    m_ExpandedIDs: 000000007c8300007e83000080830000828300008483000086830000888300008a8300008c8300008e830000908300009283000094830000e2840000f68c0000fa8c0000fe8c000000ca9a3bffffff7f
+    scrollPos: {x: 0, y: 757}
+    m_SelectedIDs: 96850000
+    m_LastClickedID: 34198
+    m_ExpandedIDs: 00000000f4830000f6830000f8830000fa830000fc830000fe83000000840000028400000484000006840000088400000a8400000c8400000e840000108400001284000060850000a085000000ca9a3bffffff7f
     m_RenameOverlay:
       m_UserAcceptedRename: 0
       m_Name: 
@@ -1142,7 +1142,7 @@ MonoBehaviour:
     scrollPos: {x: 0, y: 0}
     m_SelectedIDs: 
     m_LastClickedID: 0
-    m_ExpandedIDs: 000000007c8300007e83000080830000828300008483000086830000888300008a8300008c8300008e830000908300009283000094830000
+    m_ExpandedIDs: 00000000f4830000f6830000f8830000fa830000fc830000fe83000000840000028400000484000006840000088400000a8400000c8400000e8400001084000012840000
     m_RenameOverlay:
       m_UserAcceptedRename: 0
       m_Name: 
